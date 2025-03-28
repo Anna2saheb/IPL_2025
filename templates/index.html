@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IPL Player Predictor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container py-5">
+        <h1 class="text-center mb-4">IPL Player vs Player Predictor</h1>
+        <div class="card shadow">
+            <div class="card-body">
+                <form action="/predict" method="post">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="batsman" class="form-label">Select Batsman:</label>
+                            <select class="form-select" id="batsman" name="batsman" required>
+                                {% for player in players %}
+                                <option value="{{ player }}">{{ player }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="bowler" class="form-label">Select Bowler:</label>
+                            <select class="form-select" id="bowler" name="bowler" required>
+                                {% for player in players %}
+                                <option value="{{ player }}">{{ player }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mt-4 text-center">
+                        <button type="submit" class="btn btn-primary btn-lg">Predict Performance</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
