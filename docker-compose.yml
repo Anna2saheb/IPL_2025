@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_USE_CACHE=true
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    volumes:
+      - ./model_cache:/tmp/mlflow_cache
+      - ./data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mlflow:
+    image: mlflow/mlflow:2.10.1
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow:/mlflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0

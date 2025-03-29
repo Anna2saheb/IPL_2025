@@ -41,3 +41,7 @@ htmlcov/
 .vscode/tasks.json
 .vscode/launch.json
 .vscode/extensions.json
+
+mlartifacts/
+mlruns/
+temp.json

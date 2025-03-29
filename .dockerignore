@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+venv/
+.venv/
+.ipynb_checkpoints
+*.egg-info/
+dist/
+build/
+.DS_Store
+data/
+model_cache/
+mlflow/

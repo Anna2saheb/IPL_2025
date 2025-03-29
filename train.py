@@ -5,164 +5,160 @@ from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.neighbors import KNeighborsRegressor
 from xgboost import XGBRegressor
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    mean_squared_error, 
-    r2_score, 
-    accuracy_score, 
-    classification_report,
-    roc_auc_score
-)
+from sklearn.metrics import r2_score, roc_auc_score
 import joblib
+import mlflow
+import mlflow.sklearn
+from mlflow.models.signature import infer_signature
+import logging
+from mlflow.tracking import MlflowClient
 
-# ==============================================
-# 1. LOAD PREPROCESSED DATA
-# ==============================================
-df = pd.read_csv("data/model_ready_data.csv")
-scaler = joblib.load("data/scaler.pkl")
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ==============================================
-# 2. DEFINE TARGET VARIABLES
-# ==============================================
-# (A) For Regression (Continuous Outcomes)
-regression_targets = {
-    "Runs_Scored": "Predict runs scored by batsman",
-    "Batting_Strike_Rate": "Predict strike rate",
-    "Wickets_Taken": "Predict wickets taken by bowler"
-}
+# Initialize MLflow
+mlflow.set_tracking_uri("http://localhost:5000")
+mlflow.set_experiment("IPL_Player_Performance")
+client = MlflowClient()
 
-# (B) For Classification (Binary Outcomes)
-# Define classification targets using SCALED thresholds
-SCALED_THRESHOLD = 0.5  # Adjust based on your data distribution
-classification_targets = {
-    "High_Score": (df["Runs_Scored"] >= SCALED_THRESHOLD).astype(int),
-    "Wicket_Taken": (df["Wickets_Taken"] > 0).astype(int),
-}
+def register_model(model, model_name, X_train, run_id):
+    """Register a model in MLflow Model Registry"""
+    try:
+        # Create model version
+        result = mlflow.register_model(
+            f"runs:/{run_id}/{model_name}",
+            model_name
+        )
+        logger.info(f"Registered model '{model_name}' version {result.version}")
+        
+        # Transition to Production stage
+        client.transition_model_version_stage(
+            name=model_name,
+            version=result.version,
+            stage="Production"
+        )
+        logger.info(f"Transitioned {model_name} v{result.version} to Production")
+    except Exception as e:
+        logger.error(f"Failed to register model {model_name}: {str(e)}")
+        raise
 
-# ==============================================
-# 3. TRAIN-TEST SPLIT
-# ==============================================
-train_df = df[df["is_train"] == True].copy()
-test_df = df[df["is_train"] == False].copy()
+def load_data():
+    """Load and prepare data"""
+    df = pd.read_csv("data/model_ready_data.csv")
+    scaler = joblib.load("data/scaler.pkl")
+    
+    # Define targets
+    regression_targets = ["Runs_Scored", "Batting_Strike_Rate", "Wickets_Taken"]
+    classification_targets = {
+        "High_Score": (df["Runs_Scored"] >= 0.5).astype(int),
+        "Wicket_Taken": (df["Wickets_Taken"] > 0).astype(int)
+    }
+    
+    # Prepare features
+    features = [
+        'Batting_Average', 'Batting_Strike_Rate', 'Balls_Faced',
+        'Bowling_Average', 'Economy_Rate', 'Batsman_Dominance',
+        'Bowler_Dominance', 'Rolling_Avg_Runs', 'Batsman_Type_Anchor',
+        'Bowler_Type_Spin'
+    ]
+    
+    train_df = df[df["is_train"] == True].copy()
+    test_df = df[df["is_train"] == False].copy()
+    
+    return train_df, test_df, features, regression_targets, classification_targets
 
-# Features (excluding identifiers and targets)
-features = [
-    'Batting_Average', 'Batting_Strike_Rate', 'Balls_Faced',
-    'Bowling_Average', 'Economy_Rate', 'Batsman_Dominance',
-    'Bowler_Dominance', 'Rolling_Avg_Runs', 'Batsman_Type_Anchor',
-    'Bowler_Type_Spin'
-]
-
-X_train = train_df[features]
-X_test = test_df[features]
-
-# ==============================================
-# 4. MODEL TRAINING FUNCTIONS
-# ==============================================
-def train_regression_model(X, y, model, param_grid=None):
-    """Train a regression model with optional hyperparameter tuning"""
-    if param_grid:
-        grid = GridSearchCV(model, param_grid, cv=5, scoring='r2')
-        grid.fit(X, y)
-        best_model = grid.best_estimator_
-        print(f"Best Params: {grid.best_params_}")
-        return best_model
-    else:
-        model.fit(X, y)
+def train_and_log_model(model, model_name, X_train, y_train, X_test, y_test, params=None, task_type="regression"):
+    """Train model and log to MLflow"""
+    with mlflow.start_run(run_name=model_name, nested=True) as run:
+        # Set params and train
+        if params:
+            model.set_params(**params)
+            mlflow.log_params(params)
+        model.fit(X_train, y_train)
+        
+        # Evaluate
+        y_pred = model.predict(X_test)
+        metrics = {
+            "r2_score": r2_score(y_test, y_pred) if task_type == "regression" else np.nan,
+            "roc_auc": roc_auc_score(y_test, y_pred) if task_type == "classification" else np.nan
+        }
+        mlflow.log_metrics(metrics)
+        
+        # Log model
+        signature = infer_signature(X_train, model.predict(X_train))
+        mlflow.sklearn.log_model(model, model_name, signature=signature)
+        
+        # Register the model
+        register_model(model, model_name, X_train, run.info.run_id)
+        
+        logger.info(f"Logged and registered {model_name} - {task_type} - Metrics: {metrics}")
         return model
 
-def train_classification_model(X, y, model, param_grid=None):
-    """Train a classification model with optional hyperparameter tuning"""
-    if param_grid:
-        grid = GridSearchCV(model, param_grid, cv=5, scoring='roc_auc')
-        grid.fit(X, y)
-        best_model = grid.best_estimator_
-        print(f"Best Params: {grid.best_params_}")
-        return best_model
-    else:
-        model.fit(X, y)
-        return model
-
-# ==============================================
-# 5. TRAIN MODELS
-# ==============================================
-# (A) Regression Models
-print("\n=== Training Regression Models ===")
-for target, desc in regression_targets.items():
-    print(f"\nTraining model for: {desc}")
-    y_train = train_df[target]
-    y_test = test_df[target]
-
-    # Random Forest
-    rf = train_regression_model(
-        X_train, y_train,
+def main():
+    logger.info("Starting model training pipeline")
+    
+    # Load data
+    train_df, test_df, features, reg_targets, clf_targets = load_data()
+    X_train = train_df[features]
+    X_test = test_df[features]
+    
+    # Dictionary to store the 5 models we want to save
+    models_to_save = {}
+    
+    # Train and register Random Forest for Runs_Scored
+    y_train = train_df["Runs_Scored"]
+    y_test = test_df["Runs_Scored"]
+    rf_runs = train_and_log_model(
         RandomForestRegressor(n_estimators=100, random_state=42),
-        param_grid={
-            'max_depth': [5, 10, None],
-            'min_samples_split': [2, 5]
-        }
+        "random_forest_runs", X_train, y_train, X_test, y_test,
+        params={'max_depth': 10, 'min_samples_split': 2}
     )
-    y_pred = rf.predict(X_test)
-    print(f"Random Forest R²: {r2_score(y_test, y_pred):.3f}")
-
-    # XGBoost
-    xgb = train_regression_model(
-        X_train, y_train,
+    models_to_save["random_forest_runs"] = rf_runs
+    
+    # Train and register XGBoost for Runs_Scored
+    xgb_runs = train_and_log_model(
         XGBRegressor(random_state=42),
-        param_grid={
-            'learning_rate': [0.01, 0.1],
-            'max_depth': [3, 6]
-        }
+        "xgboost_runs", X_train, y_train, X_test, y_test,
+        params={'learning_rate': 0.1, 'max_depth': 3}
     )
-    y_pred = xgb.predict(X_test)
-    print(f"XGBoost R²: {r2_score(y_test, y_pred):.3f}")
-
-    # KNN
-    knn = train_regression_model(
-        X_train, y_train,
+    models_to_save["xgboost_runs"] = xgb_runs
+    
+    # Train and register KNN for Runs_Scored
+    knn_runs = train_and_log_model(
         KNeighborsRegressor(),
-        param_grid={
-            'n_neighbors': [3, 5, 7],
-            'weights': ['uniform', 'distance']
-        }
+        "knn_runs", X_train, y_train, X_test, y_test,
+        params={'n_neighbors': 5, 'weights': 'uniform'}
     )
-    y_pred = knn.predict(X_test)
-    print(f"KNN R²: {r2_score(y_test, y_pred):.3f}")
-
-# (B) Classification Models
-print("\n=== Training Classification Models ===")
-for target_name, target in classification_targets.items():
-    print(f"\nTraining model for: {target_name}")
-    y_train = target[train_df.index]
-    y_test = target[test_df.index]
-
-    # Logistic Regression
-    lr = train_classification_model(
-        X_train, y_train,
+    models_to_save["knn_runs"] = knn_runs
+    
+    # Train and register Logistic Regression for High_Score
+    y_train_clf = clf_targets["High_Score"][train_df.index]
+    y_test_clf = clf_targets["High_Score"][test_df.index]
+    lr_high_score = train_and_log_model(
         LogisticRegression(max_iter=1000),
-        param_grid={'C': [0.1, 1, 10]}
+        "logistic_half_century", X_train, y_train_clf, X_test, y_test_clf,
+        params={'C': 1}, task_type="classification"
     )
-    y_pred = lr.predict(X_test)
-    print(f"Logistic Regression AUC: {roc_auc_score(y_test, y_pred):.3f}")
-
-    # Random Forest Classifier
-    rf_clf = train_classification_model(
-        X_train, y_train,
+    models_to_save["logistic_half_century"] = lr_high_score
+    
+    # Train and register Random Forest Classifier for Wicket_Taken
+    y_train_wicket = clf_targets["Wicket_Taken"][train_df.index]
+    y_test_wicket = clf_targets["Wicket_Taken"][test_df.index]
+    rf_wicket = train_and_log_model(
         RandomForestClassifier(random_state=42),
-        param_grid={
-            'max_depth': [5, 10],
-            'class_weight': ['balanced']
-        }
+        "rf_classifier_wicket", X_train, y_train_wicket, X_test, y_test_wicket,
+        params={'max_depth': 10, 'class_weight': 'balanced'}, 
+        task_type="classification"
     )
-    y_pred = rf_clf.predict(X_test)
-    print(f"Random Forest AUC: {roc_auc_score(y_test, y_pred):.3f}")
+    models_to_save["rf_classifier_wicket"] = rf_wicket
+    
+    # Save the selected models to disk (optional)
+    for model_name, model in models_to_save.items():
+        joblib.dump(model, f"models/{model_name}.pkl")
+        logger.info(f"Saved model: {model_name}.pkl")
+    
+    logger.info("Model training and registration completed successfully")
 
-# ==============================================
-# 6. SAVE MODELS
-# ==============================================
-joblib.dump(rf, "models/random_forest_runs.pkl")
-joblib.dump(xgb, "models/xgboost_runs.pkl")
-joblib.dump(knn, "models/knn_runs.pkl")
-joblib.dump(lr, "models/logistic_half_century.pkl")
-joblib.dump(rf_clf, "models/rf_classifier_wicket.pkl")
-
-print("\n=== Models saved successfully! ===")
+if __name__ == "__main__":
+    main()

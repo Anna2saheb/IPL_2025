@@ -1,0 +1,38 @@
+name: Simple CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  run-application:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install uvicorn
+        
+    - name: Run tests
+      run: |
+        pytest
+        
+    - name: Start application
+      run: |
+        uvicorn app:app --host 0.0.0.0 --port 8000 &
+        echo "Application running at http://localhost:8000"
+        
+    - name: Keep alive (for testing)
+      if: ${{ github.event_name == 'workflow_dispatch' }}
+      run: |
+        sleep 300  # Keeps the application running for 5 minutes for testing
